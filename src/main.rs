@@ -4,6 +4,20 @@
 use std::str::FromStr;
 use std::net::IpAddr;
 use regex::Regex;
+use reqwest::blocking::Client;
+use anyhow::Result;
+
+
+struct NginxStatus {
+    active_connections: u16,
+    accepted_connections: u64,
+    handled_connections: u64,
+    total_requests: u64,
+    reading: u32,
+    writing: u32,
+    waiting: u32
+}
+
 
 #[derive(Debug)]
 struct NginxAccessLog {
@@ -22,13 +36,38 @@ struct NginxAccessLog {
 
 
 fn main() {
+    let url = "https://dev01.firewalls.com/nginx_status";
+    let res = fetch_url(&url);
+    let body = match res {
+        Ok(b) => b,
+        Err(e) => format!("error: {e}")
+    };
+    println!("{:#?}", body);
+
+    //let body = match res.request {
+    //    Ok(b) => b,
+    //    Err(e) => panic!("{e:?}"),
+    //};
+    //println!("{:#?}", body)
     //let mut buffer: Vec<String> = vec![];
 
-    let log = r#"IP: 127.0.0.1 - User: - - Time: [27/Oct/2024:10:52:44 -0400] - Method: GET - URI: /health_check.php - Status: 200 - Bytes Sent: 5 - Request Time: 0.012 - Referer: "-" - User Agent: "-" - Forwarded For: "-""#;
-    match NginxAccessLog::try_from(log) {
-        Ok(parsed_log) => println!("{:#?}", parsed_log),
-        Err(e) => println!("Failed to parse log: {}", e),
+    //let log = r#"IP: 127.0.0.1 - User: - - Time: [27/Oct/2024:10:52:44 -0400] - Method: GET - URI: /health_check.php - Status: 200 - Bytes Sent: 5 - Request Time: 0.012 - Referer: "-" - User Agent: "-" - Forwarded For: "-""#;
+    //match NginxAccessLog::try_from(log) {
+    //    Ok(parsed_log) => println!("{:#?}", parsed_log),
+    //    Err(e) => println!("Failed to parse log: {}", e),
+    //}
+}
+
+
+fn fetch_url(url: &str) -> Result<String> {
+    let client = Client::new();
+    let res = client.get(url).send()?;
+    if !res.status().is_success() {
+        return Err(anyhow::anyhow!("Failed with status: {}", res.status()));
     }
+
+    let body = res.text()?;
+    Ok(body)
 }
 
 impl TryFrom<&str> for NginxAccessLog {

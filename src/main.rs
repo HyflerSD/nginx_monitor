@@ -8,6 +8,7 @@ use reqwest::blocking::Client;
 use anyhow::Result;
 
 
+#[derive(Debug)]
 struct NginxStatus {
     active_connections: u16,
     accepted_connections: u64,
@@ -56,6 +57,10 @@ fn main() {
     //    Ok(parsed_log) => println!("{:#?}", parsed_log),
     //    Err(e) => println!("Failed to parse log: {}", e),
     //}
+    match NginxStatus::try_from(&body[..]) {
+        Ok(data) => println!("{:#?}", data),
+        Err(e) => println!("error: {:#?}", e)
+    }
 }
 
 
@@ -69,6 +74,28 @@ fn fetch_url(url: &str) -> Result<String> {
     let body = res.text()?;
     Ok(body)
 }
+
+impl TryFrom<&str> for NginxStatus {
+
+    type Error = String;
+
+    fn try_from(line: &str) -> Result<Self, Self::Error> {
+        let stuff: Vec<u64> = line
+            .split_whitespace()
+            .filter_map(|token| token.parse::<u64>().ok())
+            .collect();
+
+        Ok(NginxStatus {
+            active_connections: stuff[0] as u16,
+            accepted_connections: stuff[1] as u64,
+            handled_connections: stuff[2] as u64,
+            total_requests: stuff[3] as u64,
+            reading: stuff[4] as u32,
+            writing: stuff[5] as u32,
+            waiting: stuff[6] as u32
+        })
+    }
+} 
 
 impl TryFrom<&str> for NginxAccessLog {
     type Error = String;

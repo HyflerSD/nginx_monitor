@@ -6,6 +6,8 @@ use std::net::IpAddr;
 use regex::Regex;
 use reqwest::blocking::Client;
 use anyhow::Result;
+use mysql::*;
+use mysql::prelude::*;
 
 
 #[derive(Debug)]
@@ -35,32 +37,55 @@ struct NginxAccessLog {
     http_x_forwarded_for: Option<String>,
 }
 
+#[derive(Debug)]
+struct user {
+    email: String
+}
 
-fn main() {
+
+fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let url = "https://dev01.firewalls.com/nginx_status";
     let res = fetch_url(&url);
     let body = match res {
         Ok(b) => b,
         Err(e) => format!("error: {e}")
     };
-    println!("{:#?}", body);
 
-    //let body = match res.request {
-    //    Ok(b) => b,
-    //    Err(e) => panic!("{e:?}"),
-    //};
-    //println!("{:#?}", body)
+    //println!("{:#?}", body);
     //let mut buffer: Vec<String> = vec![];
 
-    //let log = r#"IP: 127.0.0.1 - User: - - Time: [27/Oct/2024:10:52:44 -0400] - Method: GET - URI: /health_check.php - Status: 200 - Bytes Sent: 5 - Request Time: 0.012 - Referer: "-" - User Agent: "-" - Forwarded For: "-""#;
-    //match NginxAccessLog::try_from(log) {
-    //    Ok(parsed_log) => println!("{:#?}", parsed_log),
-    //    Err(e) => println!("Failed to parse log: {}", e),
-    //}
-    match NginxStatus::try_from(&body[..]) {
-        Ok(data) => println!("{:#?}", data),
-        Err(e) => println!("error: {:#?}", e)
-    }
+    let log = r#"IP: 127.0.0.1 - User: - - Time: [27/Oct/2024:10:52:44 -0400] - Method: GET - URI: /health_check.php - Status: 200 - Bytes Sent: 5 - Request Time: 0.012 - Referer: "-" - User Agent: "-" - Forwarded For: "-""#;
+
+    let res = NginxAccessLog::process_log_entry(log);
+    match res {
+        Ok(Some(parsed_log)) => {
+            println!("Looks good {:#?}", parsed_log);
+        },
+        Ok(None) => {
+            eprintln!("Looks bad");
+        }
+        Err(e) => {
+            eprintln!("Error: {}", e);
+        }
+    };
+
+    let url = "mysql://root:password@localhost:3306/cre";
+    let pool = Pool::new(url)?;
+
+    let mut conn = pool.get_conn()?;
+
+    let u: user = user{email: String::from("adfjh@crepipeline.com")};
+
+    let user_email = conn
+        .query_map(
+            "SELECT email FROM users LIMIT 1",
+            |email| {
+                user{email}
+            }
+        )?;
+
+    println!("User email: {:#?}", user_email);
+    Ok(())
 }
 
 
@@ -84,6 +109,9 @@ impl TryFrom<&str> for NginxStatus {
             .split_whitespace()
             .filter_map(|token| token.parse::<u64>().ok())
             .collect();
+        for element in &stuff {
+            println!("{}", element);
+        }
 
         Ok(NginxStatus {
             active_connections: stuff[0] as u16,
@@ -94,8 +122,23 @@ impl TryFrom<&str> for NginxStatus {
             writing: stuff[5] as u32,
             waiting: stuff[6] as u32
         })
+
     }
-} 
+
+}
+
+impl NginxAccessLog {
+    fn process_log_entry(log: &str) -> Result<Option<NginxAccessLog>, String> {
+
+        match NginxAccessLog::try_from(log) {
+            Ok(parsed_log) => Ok(Some(parsed_log)),
+            Err(e) => {
+                eprintln!("Parse Error: {}\nLog: {}", e, log);
+                Ok(None)
+            }
+        }
+    }
+}
 
 impl TryFrom<&str> for NginxAccessLog {
     type Error = String;

@@ -8,3 +8,4 @@ anyhow = "1.0.91"
 regex = "1.11.1"
 reqwest = { version = "0.12.8", features = ["blocking", "json"] }
 sysinfo = "0.32.0"
+mysql="*"

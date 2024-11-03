@@ -1,6 +1,3 @@
-//use sysinfo::{
-//    System,
-//};
 use std::str::FromStr;
 use std::net::IpAddr;
 use regex::Regex;
@@ -8,7 +5,11 @@ use reqwest::blocking::Client;
 use anyhow::Result;
 use mysql::*;
 use mysql::prelude::*;
-
+use linemux::MuxedLines;
+use tokio;
+use dotenv::dotenv;
+use std::env::{self, Vars};
+#[allow(unused_imports)]
 
 #[derive(Debug)]
 struct NginxStatus {
@@ -22,7 +23,7 @@ struct NginxStatus {
 }
 
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct NginxAccessLog {
     remote_addr: IpAddr,
     remote_user: Option<String>,
@@ -42,8 +43,61 @@ struct user {
     email: String
 }
 
+struct dbConn {
 
-fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    user: String,
+}
+
+const BUFFER_SIZE: usize = 150;
+
+#[tokio::main]
+async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    dotenv().ok();
+
+    let db_url = OptsBuilder::new()
+        .user(Some(env::var("DB_USER").expect("DB_URL must be set!")))
+        .db_name(Some(env::var("DB_NAME").expect("DB_NAME must be set!")))
+        .pass(Some(env::var("DB_PASS").expect("DB_PASS must be set!")));
+    let pool = Pool::new(db_url)?;
+
+    let mut conn = pool.get_conn()?;
+    let created = create_access_log_table(&mut conn);
+    match created {
+        Ok(good) => println!("{:#?}", good),
+        Err(bad) => println!("Bad Message: {:#?}", bad)
+    }
+
+    let mut lines = MuxedLines::new()?;
+
+    lines.add_file("/home/michael/www/fw/access.log").await?;
+
+    let mut buffer: Vec<NginxAccessLog> = vec![];
+
+    while let Ok(Some(line)) = lines.next_line().await {
+        let res = NginxAccessLog::process_log_entry(line.line());
+        match res {
+            Ok(Some(parsed_log)) => {
+                if buffer.len() >= BUFFER_SIZE {
+                    println!("\nAttempting to Insert {} records\n", buffer.len());
+                    let buff_clone = buffer.clone();
+                    let _ = insert_logs(buff_clone, &mut conn);
+                    println!("Clearing {} items from Buffer", buffer.len());
+                    buffer.clear();
+                }
+
+                print!("\rBuffer Size: {}", buffer.len());
+                use std::io::Write;
+                std::io::stdout().flush().unwrap();
+                buffer.push(parsed_log);
+            },
+            Ok(None) => {
+                eprintln!("Looks bad");
+            }
+            Err(e) => {
+                eprintln!("Error: {}", e);
+            }
+        };
+    }
     let url = "https://dev01.firewalls.com/nginx_status";
     let res = fetch_url(&url);
     let body = match res {
@@ -51,43 +105,15 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         Err(e) => format!("error: {e}")
     };
 
-    //println!("{:#?}", body);
-    //let mut buffer: Vec<String> = vec![];
+    ////println!("{:#?}", body);
 
-    let log = r#"IP: 127.0.0.1 - User: - - Time: [27/Oct/2024:10:52:44 -0400] - Method: GET - URI: /health_check.php - Status: 200 - Bytes Sent: 5 - Request Time: 0.012 - Referer: "-" - User Agent: "-" - Forwarded For: "-""#;
-
-    let res = NginxAccessLog::process_log_entry(log);
-    match res {
-        Ok(Some(parsed_log)) => {
-            println!("Looks good {:#?}", parsed_log);
-        },
-        Ok(None) => {
-            eprintln!("Looks bad");
-        }
-        Err(e) => {
-            eprintln!("Error: {}", e);
-        }
-    };
-
-    let url = "mysql://root:password@localhost:3306/cre";
-    let pool = Pool::new(url)?;
-
-    let mut conn = pool.get_conn()?;
-
-    let u: user = user{email: String::from("adfjh@crepipeline.com")};
-
-    let user_email = conn
-        .query_map(
-            "SELECT email FROM users LIMIT 1",
-            |email| {
-                user{email}
-            }
-        )?;
-
-    println!("User email: {:#?}", user_email);
     Ok(())
 }
 
+
+fn p<T>(_: &T) {
+    println!("{:?}", std::any::type_name::<T>())
+}
 
 fn fetch_url(url: &str) -> Result<String> {
     let client = Client::new();
@@ -138,6 +164,83 @@ impl NginxAccessLog {
             }
         }
     }
+
+    fn insert(&self, conn: &mut PooledConn) -> Result<String, Error> {
+        conn.exec_drop(
+            "INSERT INTO roles (name, guard_name) VALUES (?,?)",
+            ("michael", "mike")
+        )?;
+
+        Ok(String::from("Success!"))
+    }
+}
+
+fn insert_logs(logs: Vec<NginxAccessLog>, conn: &mut PooledConn) ->Result<(), Error> {
+
+    conn.exec_batch(
+        r"INSERT INTO access_logs (
+             remote_addr,
+             remote_user,
+             time_local,
+             request_method,
+             request_uri,
+             status,
+             body_bytes_sent,
+             request_time,
+             http_referer,
+             http_user_agent,
+             http_x_forwarded_for
+        )
+        VALUES (
+             :remote_addr,
+             :remote_user,
+             :time_local,
+             :request_method,
+             :request_uri,
+             :status,
+             :body_bytes_sent,
+             :request_time,
+             :http_referer,
+             :http_user_agent,
+             :http_x_forwarded_for
+        )",
+        logs.iter().map(|log| params! {
+             "remote_addr" => log.remote_addr.to_string(),
+             "remote_user" => log.remote_user.clone(),
+             "time_local" => log.time_local.clone(),
+             "request_method" => log.request_method.clone(),
+             "request_uri" => log.request_uri.clone(),
+             "status" => log.status,
+             "body_bytes_sent" => log.body_bytes_sent,
+             "request_time" => log.request_time,
+             "http_referer" => log.http_referer.clone(),
+             "http_user_agent" => log.http_user_agent.clone(),
+             "http_x_forwarded_for" => log.http_x_forwarded_for.clone()
+        })
+    )?;
+
+    Ok(())
+}
+
+fn create_access_log_table(conn: &mut PooledConn) -> Result<(), Error> {
+    conn.query_drop(
+        "CREATE TABLE IF NOT EXISTS access_logs (
+             id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+             remote_addr TEXT NOT NULL, 
+             remote_user TEXT,
+             time_local TEXT NOT NULL,
+             request_method TEXT NOT NULL,
+             request_uri TEXT NOT NULL,
+             status SMALLINT NOT NULL,
+             body_bytes_sent INT NOT NULL,
+             request_time DOUBLE NOT NULL,
+             http_referer TEXT,
+             http_user_agent TEXT,
+             http_x_forwarded_for TEXT
+        )"
+    )?;
+
+    Ok(())
 }
 
 impl TryFrom<&str> for NginxAccessLog {

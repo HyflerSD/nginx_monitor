@@ -9,3 +9,6 @@ regex = "1.11.1"
 reqwest = { version = "0.12.8", features = ["blocking", "json"] }
 sysinfo = "0.32.0"
 mysql="*"
+linemux = "0.3.0"
+tokio = { version = "1.41.0", features = ["full"] }
+dotenv = "0.15.0"

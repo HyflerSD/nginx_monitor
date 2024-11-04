@@ -1,4 +1,3 @@
-use std::str::FromStr;
 use std::net::IpAddr;
 use regex::Regex;
 use reqwest::blocking::Client;
@@ -8,8 +7,7 @@ use mysql::prelude::*;
 use linemux::MuxedLines;
 use tokio;
 use dotenv::dotenv;
-use std::env::{self, Vars};
-#[allow(unused_imports)]
+use std::env::{self};
 
 #[derive(Debug)]
 struct NginxStatus {
@@ -38,16 +36,6 @@ struct NginxAccessLog {
     http_x_forwarded_for: Option<String>,
 }
 
-#[derive(Debug)]
-struct user {
-    email: String
-}
-
-struct dbConn {
-
-    user: String,
-}
-
 const BUFFER_SIZE: usize = 150;
 
 #[tokio::main]
@@ -67,6 +55,14 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         Err(bad) => println!("Bad Message: {:#?}", bad)
     }
 
+    let url = "https://dev01.firewalls.com/nginx_status";
+    let res = match fetch_url(&url) {
+        Ok(data) => data,
+        Err(e) => {
+            println!("{:#?}", e);
+            e.to_string()
+        }
+    };
     let mut lines = MuxedLines::new()?;
 
     lines.add_file("/home/michael/www/fw/access.log").await?;
@@ -98,22 +94,14 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             }
         };
     }
-    let url = "https://dev01.firewalls.com/nginx_status";
-    let res = fetch_url(&url);
-    let body = match res {
-        Ok(b) => b,
-        Err(e) => format!("error: {e}")
-    };
-
-    ////println!("{:#?}", body);
-
+    //println!("{:#?}", res);
     Ok(())
 }
 
 
-fn p<T>(_: &T) {
-    println!("{:?}", std::any::type_name::<T>())
-}
+//fn p<T>(_: &T) {
+//    println!("{:?}", std::any::type_name::<T>())
+//}
 
 fn fetch_url(url: &str) -> Result<String> {
     let client = Client::new();
@@ -150,7 +138,6 @@ impl TryFrom<&str> for NginxStatus {
         })
 
     }
-
 }
 
 impl NginxAccessLog {
@@ -163,15 +150,6 @@ impl NginxAccessLog {
                 Ok(None)
             }
         }
-    }
-
-    fn insert(&self, conn: &mut PooledConn) -> Result<String, Error> {
-        conn.exec_drop(
-            "INSERT INTO roles (name, guard_name) VALUES (?,?)",
-            ("michael", "mike")
-        )?;
-
-        Ok(String::from("Success!"))
     }
 }
 
@@ -222,7 +200,7 @@ fn insert_logs(logs: Vec<NginxAccessLog>, conn: &mut PooledConn) ->Result<(), Er
     Ok(())
 }
 
-fn create_access_log_table(conn: &mut PooledConn) -> Result<(), Error> {
+fn create_access_log_table(conn: &mut PooledConn) -> Result<String, Error> {
     conn.query_drop(
         "CREATE TABLE IF NOT EXISTS access_logs (
              id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -240,7 +218,7 @@ fn create_access_log_table(conn: &mut PooledConn) -> Result<(), Error> {
         )"
     )?;
 
-    Ok(())
+    Ok(String::from("Got The table dude!\n"))
 }
 
 impl TryFrom<&str> for NginxAccessLog {
